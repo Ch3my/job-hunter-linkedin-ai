@@ -5,24 +5,14 @@
   "maxRetries": 3,
   "providers": {
     "fantastic_linkedin": {
-      "endpoint": "active-jb-7d",
-      "limit": 25,
-      "offset": 0,
-      "titleFilter": "Contador Auditor",
-      "advancedTitleFilter": "",
-      "locationFilter": "Chile",
-      "descriptionFilter": "",
-      "organizationFilter": "",
-      "descriptionType": "text",
-      "remote": null,
-      "includeAgencies": true,
-      "includeAi": false,
-      "seniorityFilter": "",
-      "aiWorkArrangementFilter": "",
-      "aiEmploymentTypeFilter": "",
-      "aiExperienceLevelFilter": "",
-      "directApply": null,
-      "dateFilter": ""
+      "search": {
+        "time_frame": "24h",
+        "limit": 25,
+        "offset": 0,
+        "description_format": "text",
+        "title": "Contador Auditor",
+        "location": "Chile"
+      }
     },
     "linkedin_data_scraper": {
       "jobQuery": "Contador Auditor",

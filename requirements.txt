@@ -4,5 +4,8 @@ langchain
 langchain-core
 langchain-openai
 
+# Desarrollo
+pytest
+
 # Solo para compilar el ejecutable
 pyinstaller

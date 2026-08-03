@@ -12,7 +12,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from providers.base import ProviderError
@@ -30,6 +30,8 @@ class HttpClient:
     timeout: int = 30
     max_retries: int = 3
     backoff_seconds: float = 1.5
+    # Cabeceras de la ultima respuesta, para leer la cuota restante.
+    last_headers: Dict[str, str] = field(default_factory=dict)
 
     def get_json(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         url = self._build_url(path, params)
@@ -40,16 +42,28 @@ class HttpClient:
                 request = urllib.request.Request(url, headers=self.headers, method="GET")
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     body = response.read()
+                    self.last_headers = {k.lower(): v for k, v in response.headers.items()}
                 return self._decode(body)
 
             except urllib.error.HTTPError as error:
+                # Las respuestas de error tambien traen las cabeceras de cuota:
+                # es justo cuando mas util es saber cuanto queda.
+                self.last_headers = {k.lower(): v for k, v in error.headers.items()}
                 detail = self._error_body(error)
                 last_error = f"HTTP {error.code}: {detail}"
+
                 if error.code in (401, 403):
                     raise ProviderError(
                         f"La API rechazo la credencial (HTTP {error.code}). "
                         f"Revisa 'rapidApiKey' en config.json. {detail}"
                     ) from error
+
+                if error.code == 429 and not self._quota_left():
+                    # Reintentar no sirve: la cuota del plan esta agotada.
+                    raise ProviderError(
+                        f"Se agoto la cuota del plan. {self.quota_summary()}. {detail}"
+                    ) from error
+
                 if error.code not in RETRY_STATUS:
                     raise ProviderError(f"La API respondio {error.code}. {detail}") from error
 
@@ -89,6 +103,52 @@ class HttpClient:
             return json.loads(body.decode("utf-8"))
         except UnicodeDecodeError:
             return json.loads(body.decode("utf-8", errors="replace"))
+
+    def quota(self) -> Dict[str, Optional[int]]:
+        """Creditos restantes segun las cabeceras de la ultima respuesta.
+
+        La API devuelve dos contadores distintos: "jobs" (se descuenta un
+        credito por cada trabajo devuelto) y "requests" (uno por llamada). El
+        de jobs es el que se agota primero, por diseno.
+        """
+        def leer(nombre: str) -> Optional[int]:
+            try:
+                return int(self.last_headers.get(nombre, ""))
+            except (TypeError, ValueError):
+                return None
+
+        return {
+            "jobs_remaining": leer("x-ratelimit-jobs-remaining"),
+            "jobs_limit": leer("x-ratelimit-jobs-limit"),
+            "requests_remaining": leer("x-ratelimit-requests-remaining"),
+            "requests_limit": leer("x-ratelimit-requests-limit"),
+            "reset_seconds": leer("x-ratelimit-jobs-reset"),
+        }
+
+    def _quota_left(self) -> bool:
+        """False si algun contador de cuota llego a cero (reintentar no sirve)."""
+        q = self.quota()
+        for key in ("jobs_remaining", "requests_remaining"):
+            if q[key] is not None and q[key] <= 0:
+                return False
+        return True
+
+    def quota_summary(self) -> str:
+        """Texto corto con la cuota, o "" si la API no mando las cabeceras."""
+        q = self.quota()
+        if q["jobs_remaining"] is None and q["requests_remaining"] is None:
+            return ""
+
+        partes = []
+        if q["jobs_remaining"] is not None:
+            total = f"/{q['jobs_limit']}" if q["jobs_limit"] else ""
+            partes.append(f"jobs {q['jobs_remaining']}{total}")
+        if q["requests_remaining"] is not None:
+            total = f"/{q['requests_limit']}" if q["requests_limit"] else ""
+            partes.append(f"requests {q['requests_remaining']}{total}")
+        if q["reset_seconds"]:
+            partes.append(f"renueva en {q['reset_seconds'] // 86400}d")
+        return "cuota restante: " + ", ".join(partes)
 
     @staticmethod
     def _error_body(error: urllib.error.HTTPError) -> str:

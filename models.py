@@ -8,6 +8,10 @@ datos, la AI ni la interfaz.
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+# La politica de identidad vive en su propio modulo: es una decision de la app,
+# no de un proveedor ni parte de la forma del dato. Ver identity.py.
+from identity import build_job_key
+
 NOT_APPLIED = "Not applied"
 APPLIED = "Applied"
 DISCARDED = "Discarded"
@@ -35,8 +39,8 @@ class JobPosting:
 
     @property
     def key(self) -> str:
-        """Clave logica: la misma que usa la tabla (titulo + empresa)."""
-        return f"{self.title.strip().lower()}|{self.company.strip().lower()}"
+        """Clave logica: la misma que usa la tabla (titulo + empresa normalizados)."""
+        return build_job_key(self.title, self.company)
 
     def is_valid(self) -> bool:
         """Sin titulo o sin empresa no se puede guardar (son la PK)."""

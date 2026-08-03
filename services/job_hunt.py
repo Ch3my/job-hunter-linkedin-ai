@@ -36,6 +36,7 @@ class HuntReport:
     new_jobs: List[JobPosting] = field(default_factory=list)
     error: str = ""
     ai_notice: str = ""
+    quota: str = ""
 
     def message(self) -> str:
         if self.error:
@@ -46,7 +47,11 @@ class HuntReport:
         )
         # Si la AI no filtro, hay que decirlo: si no, parece que el prompt.txt
         # se aplico cuando en realidad se guardo todo.
-        return f"{resumen}  ({self.ai_notice})" if self.ai_notice else resumen
+        if self.ai_notice:
+            resumen = f"{resumen}  ({self.ai_notice})"
+        if self.quota:
+            resumen = f"{resumen}  [{self.quota}]"
+        return resumen
 
 
 def job_hunt(
@@ -83,7 +88,10 @@ def job_hunt(
 
     report.received = result.received
     report.skipped_by_api = result.skipped
+    report.quota = result.quota
     append_to_log(f"[job_hunt] {source.name}: {result.summary()}")
+    if result.quota:
+        status(result.quota)
 
     if not result.postings:
         status("La busqueda no devolvio trabajos utilizables.")

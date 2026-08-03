@@ -30,25 +30,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "maxRetries": 3,
     "providers": {
         # https://rapidapi.com/fantastic-jobs-fantastic-jobs-default/api/linkedin-job-search-api
+        # Las claves de "search" son los nombres reales de los parametros de la
+        # API, asi la documentacion sirve directo como referencia.
         "fantastic_linkedin": {
-            "endpoint": "active-jb-7d",
-            "limit": 25,
-            "offset": 0,
-            "titleFilter": "Contador Auditor",
-            "advancedTitleFilter": "",
-            "locationFilter": "Chile",
-            "descriptionFilter": "",
-            "organizationFilter": "",
-            "descriptionType": "text",
-            "remote": None,
-            "includeAgencies": True,
-            "includeAi": False,
-            "seniorityFilter": "",
-            "aiWorkArrangementFilter": "",
-            "aiEmploymentTypeFilter": "",
-            "aiExperienceLevelFilter": "",
-            "directApply": None,
-            "dateFilter": "",
+            "search": {
+                "time_frame": "24h",
+                "limit": 25,
+                "offset": 0,
+                "description_format": "text",
+                "title": "Contador Auditor",
+                "location": "Chile",
+            }
         },
         # Proveedor anterior, se deja para poder volver atras cambiando "provider".
         # https://rapidapi.com/mgujjargamingm/api/linkedin-data-scraper

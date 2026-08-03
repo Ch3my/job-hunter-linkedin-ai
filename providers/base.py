@@ -33,6 +33,8 @@ class FetchResult:
     received: int = 0
     skipped: int = 0
     warnings: List[str] = field(default_factory=list)
+    # Cuota restante informada por la API, si la expone ("" si no).
+    quota: str = ""
 
     def warn(self, message: str) -> None:
         self.skipped += 1
