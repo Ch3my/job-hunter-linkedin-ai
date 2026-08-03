@@ -1,0 +1,8 @@
+# La busqueda de trabajos y la base de datos usan solo la libreria estandar.
+# Estos paquetes son para la evaluacion de relevancia con AI.
+langchain
+langchain-core
+langchain-openai
+
+# Solo para compilar el ejecutable
+pyinstaller

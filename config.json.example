@@ -1,9 +1,38 @@
 {
-    "rapidApiKey": "YOUR API KEY",
-    "jobQuery": "Contador Auditor",
-    "jobLocation": "chile",
-    "workplaceType": "2",
-    "sortBy": "DD",
-    "jobType": "F",
-    "searchLocationId": "104621616"
+  "provider": "fantastic_linkedin",
+  "rapidApiKey": "YOUR API KEY",
+  "requestTimeout": 30,
+  "maxRetries": 3,
+  "providers": {
+    "fantastic_linkedin": {
+      "endpoint": "active-jb-7d",
+      "limit": 25,
+      "offset": 0,
+      "titleFilter": "Contador Auditor",
+      "advancedTitleFilter": "",
+      "locationFilter": "Chile",
+      "descriptionFilter": "",
+      "organizationFilter": "",
+      "descriptionType": "text",
+      "remote": null,
+      "includeAgencies": true,
+      "includeAi": false,
+      "seniorityFilter": "",
+      "aiWorkArrangementFilter": "",
+      "aiEmploymentTypeFilter": "",
+      "aiExperienceLevelFilter": "",
+      "directApply": null,
+      "dateFilter": ""
+    },
+    "linkedin_data_scraper": {
+      "jobQuery": "Contador Auditor",
+      "jobLocation": "chile",
+      "searchLocationId": "104621616",
+      "workplaceType": "2",
+      "sortBy": "DD",
+      "jobType": "F",
+      "page": "1",
+      "easyApply": "false"
+    }
+  }
 }
