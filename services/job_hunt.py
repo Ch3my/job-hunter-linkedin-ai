@@ -14,7 +14,7 @@ Aislamiento de errores, de afuera hacia adentro:
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
-from ai import RelevanceClassifier, create_classifier, is_relevant
+from ai import RelevanceClassifier, as_verdict, create_classifier
 from db import insert_job, job_exists
 from models import JobPosting
 from providers import FetchResult, JobSource, ProviderError, create_source
@@ -42,7 +42,7 @@ class HuntReport:
         if self.error:
             return f"Error: {self.error}"
         resumen = (
-            f"{self.inserted} nuevos | {self.already_known} ya guardados | "
+            f"{self.inserted} nuevos | {self.already_known} ya evaluados | "
             f"{self.not_relevant} descartados por AI | {self.received} revisados"
         )
         # Si la AI no filtro, hay que decirlo: si no, parece que el prompt.txt
@@ -109,14 +109,23 @@ def job_hunt(
         status(f"Evaluando {index}/{total}: {posting.title[:60]}")
 
         try:
-            # Si ya esta en la base no gastamos una llamada al LLM.
+            # Si ya esta en la base no gastamos una llamada al LLM. Esto incluye
+            # los que la AI ya descarto: tambien quedan guardados, justamente
+            # para no volver a evaluarlos en cada corrida.
             if job_exists(posting.title, posting.company):
                 report.already_known += 1
                 continue
 
-            posting.relevant = classifier.classify(posting)
-            if not is_relevant(posting.relevant):
+            verdict = as_verdict(classifier.classify(posting))
+            posting.relevant = verdict.label
+            posting.score = verdict.score
+            posting.reason = verdict.reason
+
+            # El descartado se guarda igual (queda fuera de la grilla), asi la
+            # proxima corrida lo saltea sin pagarle al LLM de nuevo.
+            if not verdict.relevant:
                 report.not_relevant += 1
+                insert_job(posting)
                 continue
 
             if insert_job(posting):

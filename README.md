@@ -3,8 +3,8 @@ Obtiene una lista de trabajos desde una API, los evalúa con AI y guarda los rel
 
 ## Funcionamiento ##
 1. Se consulta la API de trabajos configurada en `config.json`.
-2. Cada trabajo que **no** esté ya en la base de datos se evalúa con AI para saber si es `relevante` o `no-relevante`.
-3. Los `relevantes` se guardan en `jobs.db`, donde puedes marcar cuáles ya aplicaste.
+2. Cada trabajo que **no** esté ya en la base de datos se evalúa con AI, que le pone un puntaje de 0 a 100 y una línea explicando por qué.
+3. Los que llegan al corte (`ai.minScore`, por defecto 60) se guardan en `jobs.db`, donde puedes marcar cuáles ya aplicaste. Los descartados también se guardan, pero fuera de la grilla: así no se le vuelve a pagar al LLM por el mismo trabajo en cada búsqueda.
 
 La clave de los registros es el cargo y la empresa: si encuentra el mismo trabajo en una búsqueda futura no lo duplica. Ver [Identidad de un trabajo](#identidad-de-un-trabajo).
 
@@ -95,7 +95,7 @@ hecho. Queda anotado en `log.txt`.
 
 * **Falla la API completa** (credencial, timeout, 5xx) → `ProviderError`. El cliente HTTP reintenta con backoff exponencial en 429/5xx/timeouts; si igual falla, la app muestra el mensaje y sigue viva.
 * **Un trabajo viene mal o le falta un campo** → se registra en `log.txt` y se continúa con el siguiente. Un ítem malo nunca corta la búsqueda. Sin `title` o sin `organization` el trabajo se salta (son la clave primaria); cualquier otro campo ausente simplemente queda vacío.
-* **Falla la AI en un trabajo** → se asume `relevante` (mejor revisar uno de más que perder uno bueno).
+* **Falla la AI en un trabajo** → se asume `relevante` con puntaje `-1` ("no evaluado"): mejor revisar uno de más que perder uno bueno. Como no queda descartado, se vuelve a evaluar en la próxima búsqueda.
 * **Falta `prompt.txt` o `langchain`** → la app funciona igual, guardando todos los trabajos sin filtrar.
 
 ## Configuración ##
@@ -190,6 +190,18 @@ Soy un contador en busca de trabajo, debes evaluar si el trabajo se ajusta a mis
 
 Mis habilidades son: contabilidad general, auditoría, análisis financiero, preparación de impuestos, contabilidad de costos, contabilidad de gestión, manejo de software contable (como QuickBooks y SAP), conciliaciones bancarias, gestión de presupuestos, informes financieros, cumplimiento normativo y asesoría fiscal.
 ```
+
+### El corte lo pones tú ###
+
+El modelo no decide si un trabajo entra: entrega un puntaje de 0 a 100 y un motivo. Quién pasa se define en `config.json`:
+
+```json
+"ai": { "minScore": 60 }
+```
+
+Súbelo si te está dejando pasar cosas que no te sirven, bájalo si crees que está filtrando de más. El puntaje se ve en la columna `Score` de la grilla y el motivo aparece arriba de la descripción, así puedes ajustar el corte (o el `prompt.txt`) mirando resultados y no a ciegas.
+
+Cambiar el `minScore` **no** re-evalúa lo ya guardado: un trabajo descartado con el corte anterior queda descartado. Si quieres volver a empezar con el criterio nuevo, usa *Vaciar DB*.
 
 ## Entorno virtual ##
 

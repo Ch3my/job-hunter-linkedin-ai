@@ -9,8 +9,8 @@ import types
 
 import pytest
 
-from ai import AlwaysRelevant, create_classifier, is_relevant
-from ai.relevance import NOT_RELEVANT, RELEVANT, OpenAIRelevanceClassifier
+from ai import AlwaysRelevant, Verdict, as_verdict, create_classifier, is_relevant
+from ai.relevance import NOT_EVALUATED, NOT_RELEVANT, RELEVANT, OpenAIRelevanceClassifier
 from models import JobPosting
 
 PERFIL = "Soy contador. Habilidades: auditoría, análisis financiero, asesoría fiscal."
@@ -30,7 +30,7 @@ def fake_langchain(monkeypatch):
 
         def invoke(self, variables):
             capturado["variables"] = variables
-            return capturado.get("respuesta", "relevante")
+            return capturado.get("respuesta", {"score": 90, "reason": "calza"})
 
     class FakeTemplate:
         @staticmethod
@@ -42,16 +42,17 @@ def fake_langchain(monkeypatch):
         def __init__(self, **kwargs):
             capturado["llm_kwargs"] = kwargs
 
+        def with_structured_output(self, schema, **kwargs):
+            capturado["schema"] = schema
+            return self
+
     prompts = types.ModuleType("langchain_core.prompts")
     prompts.ChatPromptTemplate = FakeTemplate
-    parsers = types.ModuleType("langchain_core.output_parsers")
-    parsers.StrOutputParser = lambda: object()
     openai = types.ModuleType("langchain_openai")
     openai.ChatOpenAI = FakeChatOpenAI
 
     monkeypatch.setitem(sys.modules, "langchain_core", types.ModuleType("langchain_core"))
     monkeypatch.setitem(sys.modules, "langchain_core.prompts", prompts)
-    monkeypatch.setitem(sys.modules, "langchain_core.output_parsers", parsers)
     monkeypatch.setitem(sys.modules, "langchain_openai", openai)
     return capturado
 
@@ -86,23 +87,41 @@ class TestSeleccionDeClasificador:
 
 
 class TestArmadoDelPrompt:
-    def test_el_perfil_va_en_el_mensaje_del_usuario(self, con_prompt, fake_langchain):
+    def test_el_perfil_va_en_su_propio_mensaje(self, con_prompt, fake_langchain):
         create_classifier()
         roles = [role for role, _ in fake_langchain["messages"]]
-        assert roles == ["system", "user"]
+        assert roles == ["system", "user", "user"]
 
         _, system_text = fake_langchain["messages"][0]
-        _, user_text = fake_langchain["messages"][1]
-        assert "no-relevante" in system_text
-        assert user_text.startswith(PERFIL)
-        assert user_text.endswith("{job}")
-        assert "auditoría" in user_text
+        _, perfil_text = fake_langchain["messages"][1]
+        assert "score" in system_text
+        assert perfil_text == PERFIL
+        assert "auditoría" in perfil_text
+
+    def test_la_oferta_va_aparte_y_delimitada(self, con_prompt, fake_langchain):
+        """El texto de la oferta es ajeno: no puede leerse como instrucciones."""
+        create_classifier()
+        _, oferta_text = fake_langchain["messages"][2]
+        assert "<oferta>" in oferta_text and "</oferta>" in oferta_text
+        assert "{job}" in oferta_text
+        assert PERFIL not in oferta_text
+
+    def test_pide_la_respuesta_estructurada(self, con_prompt, fake_langchain):
+        create_classifier()
+        schema = fake_langchain["schema"]
+        assert schema["required"] == ["score", "reason"]
+        assert schema["properties"]["score"]["type"] == "integer"
 
     def test_usa_el_modelo_configurado(self, con_prompt, fake_langchain):
         from ai.relevance import DEFAULT_MODEL
 
         create_classifier()
         assert fake_langchain["llm_kwargs"]["model"] == DEFAULT_MODEL
+
+    def test_no_fuerza_temperature(self, con_prompt, fake_langchain):
+        """gpt-5-mini solo acepta la temperatura por defecto."""
+        create_classifier()
+        assert "temperature" not in fake_langchain["llm_kwargs"]
 
     def test_el_trabajo_llega_con_contexto(self, con_prompt, fake_langchain):
         classifier = create_classifier()
@@ -122,21 +141,40 @@ class TestArmadoDelPrompt:
         assert "sin descripcion" in enviado
 
 
-class TestRespuestas:
+class TestPuntajeYCorte:
+    """El LLM puntua; el corte (minScore) decide. Default: 60."""
+
+    def clasificar(self, fake, score, reason="porque si"):
+        fake["respuesta"] = {"score": score, "reason": reason}
+        return create_classifier().classify(JobPosting(title="T", company="C"))
+
     @pytest.mark.parametrize(
-        "respuesta,esperado",
-        [
-            ("relevante", RELEVANT),
-            ("no-relevante", NOT_RELEVANT),
-            ("  NO-RELEVANTE  ", NOT_RELEVANT),
-            ("No-Relevante", NOT_RELEVANT),
-            ("cualquier cosa", RELEVANT),
-            ("", RELEVANT),
-        ],
+        "score,esperado",
+        [(0, NOT_RELEVANT), (59, NOT_RELEVANT), (60, RELEVANT), (95, RELEVANT)],
     )
-    def test_normaliza_la_respuesta(self, con_prompt, fake_langchain, respuesta, esperado):
-        fake_langchain["respuesta"] = respuesta
-        assert create_classifier().classify(JobPosting(title="T", company="C")) == esperado
+    def test_el_corte_decide(self, con_prompt, fake_langchain, score, esperado):
+        assert self.clasificar(fake_langchain, score).label == esperado
+
+    def test_conserva_puntaje_y_motivo(self, con_prompt, fake_langchain):
+        verdict = self.clasificar(fake_langchain, 82, "calza con nutricion clinica")
+        assert verdict.score == 82
+        assert verdict.reason == "calza con nutricion clinica"
+
+    def test_el_corte_es_configurable(self, con_prompt, fake_langchain, workdir):
+        (workdir / "config.json").write_text('{"ai": {"minScore": 90}}', encoding="utf-8")
+        assert self.clasificar(fake_langchain, 80).label == NOT_RELEVANT
+
+    def test_un_corte_invalido_cae_al_default(self, con_prompt, fake_langchain, workdir):
+        (workdir / "config.json").write_text('{"ai": {"minScore": "muy alto"}}', encoding="utf-8")
+        assert create_classifier().threshold == 60
+
+    @pytest.mark.parametrize("score,esperado", [(-20, 0), (500, 100)])
+    def test_acota_puntajes_fuera_de_rango(self, con_prompt, fake_langchain, score, esperado):
+        assert self.clasificar(fake_langchain, score).score == esperado
+
+
+class TestAnteLaDudaPasa:
+    """Nunca se descarta un trabajo por un problema tecnico."""
 
     def test_si_el_llm_revienta_no_se_pierde_el_trabajo(self, con_prompt, fake_langchain):
         classifier = create_classifier()
@@ -146,11 +184,46 @@ class TestRespuestas:
                 raise RuntimeError("rate limit")
 
         classifier.chain = Boom()
-        assert classifier.classify(JobPosting(title="T", company="C")) == RELEVANT
+        verdict = classifier.classify(JobPosting(title="T", company="C"))
+        assert verdict.label == RELEVANT
+        assert verdict.score == NOT_EVALUATED
+        assert "rate limit" in verdict.reason
+
+    @pytest.mark.parametrize("respuesta", [{}, {"reason": "sin puntaje"}, {"score": None}, None, "texto"])
+    def test_respuesta_ilegible_deja_pasar_el_trabajo(self, con_prompt, fake_langchain, respuesta):
+        fake_langchain["respuesta"] = respuesta
+        verdict = create_classifier().classify(JobPosting(title="T", company="C"))
+        assert verdict.label == RELEVANT
+        assert verdict.score == NOT_EVALUATED
+
+    def test_sin_ai_el_veredicto_dice_que_no_se_evaluo(self):
+        verdict = AlwaysRelevant("sin prompt").classify(JobPosting(title="T", company="C"))
+        assert verdict.label == RELEVANT
+        assert verdict.score == NOT_EVALUATED
+
+
+class TestVerdict:
+    def test_se_compara_con_el_string_de_siempre(self):
+        assert Verdict(RELEVANT, 90, "x") == RELEVANT
+        assert Verdict(NOT_RELEVANT, 10, "x") == NOT_RELEVANT
+
+    def test_acepta_un_clasificador_que_devuelve_string(self):
+        """Los dobles de test viejos siguen sirviendo."""
+        assert as_verdict("no-relevante").relevant is False
+        assert as_verdict("NO-RELEVANTE").relevant is False
+        assert as_verdict(None).relevant is True
 
     @pytest.mark.parametrize(
         "valor,esperado",
-        [("relevante", True), ("no-relevante", False), ("NO-RELEVANTE", False), (None, True), ("", True)],
+        [
+            ("relevante", True),
+            ("no-relevante", False),
+            ("NO-RELEVANTE", False),
+            (None, True),
+            ("", True),
+            (Verdict(NOT_RELEVANT, 10, "x"), False),
+            (Verdict(RELEVANT, 80, "x"), True),
+        ],
     )
     def test_is_relevant(self, valor, esperado):
         assert is_relevant(valor) is esperado

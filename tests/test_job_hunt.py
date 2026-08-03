@@ -6,8 +6,8 @@ tener los mismos metodos. No hace falta libreria de mocking.
 
 import pytest
 
-from ai.relevance import NOT_RELEVANT, RELEVANT, AlwaysRelevant
-from db import create_table, insert_job, select_jobs
+from ai.relevance import NOT_RELEVANT, RELEVANT, AlwaysRelevant, Verdict
+from db import create_table, insert_job, select_discarded_jobs, select_jobs, select_one_job
 from models import JobPosting
 from providers import ProviderError
 from providers.base import FetchResult
@@ -86,6 +86,39 @@ class TestCorridaFeliz:
         classifier = FakeClassifier()
         job_hunt(source=FakeSource([job("Ya guardado"), job("Nuevo")]), classifier=classifier)
         assert classifier.vistos == ["Nuevo"]
+
+    def test_no_reevalua_lo_que_la_ai_ya_descarto(self):
+        """El descartado queda guardado: la segunda corrida no le paga al LLM."""
+        job_hunt(source=FakeSource([job("A"), job("B")]), classifier=FakeClassifier(rechazar=["B"]))
+
+        segundo = FakeClassifier(rechazar=["B"])
+        report = job_hunt(source=FakeSource([job("A"), job("B")]), classifier=segundo)
+
+        assert segundo.vistos == []           # ninguna llamada al LLM
+        assert report.already_known == 2
+        assert report.not_relevant == 0
+
+    def test_el_descartado_no_ensucia_la_grilla(self):
+        job_hunt(source=FakeSource([job("A"), job("B")]), classifier=FakeClassifier(rechazar=["B"]))
+        assert [row[0] for row in select_jobs()] == ["A"]
+        assert [row[0] for row in select_discarded_jobs()] == ["B"]
+
+    def test_guarda_puntaje_y_motivo(self):
+        class ClassifierConPuntaje:
+            def classify(self, posting):
+                return Verdict(RELEVANT, 88, "calza con el perfil")
+
+        job_hunt(source=FakeSource([job("A")]), classifier=ClassifierConPuntaje())
+        assert select_jobs()[0][4] == 88
+        assert select_one_job("A", "ACME")[2] == "calza con el perfil"
+
+    def test_guarda_el_motivo_del_descarte(self):
+        class ClassifierQueRechaza:
+            def classify(self, posting):
+                return Verdict(NOT_RELEVANT, 15, "es de otra area")
+
+        job_hunt(source=FakeSource([job("A")]), classifier=ClassifierQueRechaza())
+        assert select_discarded_jobs()[0][:4] == ("A", "ACME", 15, "es de otra area")
 
     def test_arrastra_los_contadores_de_la_api(self):
         report = job_hunt(source=FakeSource([job("A")], received=10, skipped=9),
@@ -178,7 +211,7 @@ class TestConRespuestaRealDeLaApi:
         assert report.inserted == len(api_jobs)
         filas = select_jobs()
         assert len(filas) == len(api_jobs)
-        for titulo, empresa, estado, creado in filas:
+        for titulo, empresa, estado, creado, _ in filas:
             assert titulo and empresa
             assert estado == "Not applied"
             assert creado

@@ -11,6 +11,7 @@ from db import (
     get_jobs_stats,
     insert_job,
     job_exists,
+    select_discarded_jobs,
     select_jobs,
     select_one_job,
     truncate_table,
@@ -18,9 +19,11 @@ from db import (
 )
 from models import APPLIED, DISCARDED, NOT_APPLIED, JobPosting, make_manual_posting
 
-# job_key se agrego al pasar a la clave normalizada; el resto de las columnas
-# es identico a la version anterior, para no perder los datos ya guardados.
-COLUMNAS = ["job_key", "title", "company", "description", "joburl", "applied", "createdAt"]
+# job_key se agrego al pasar a la clave normalizada, y relevant/score/reason al
+# guardar el veredicto de la AI. Las columnas del medio son identicas a la
+# version original, para no perder los datos ya guardados.
+DATOS = ["title", "company", "description", "joburl", "applied", "createdAt"]
+COLUMNAS = ["job_key"] + DATOS + ["relevant", "score", "reason"]
 
 
 @pytest.fixture
@@ -42,7 +45,7 @@ class TestEsquema:
         """Los datos que ya tenias se siguen guardando igual."""
         with sqlite3.connect(workdir / "jobs.db") as conn:
             columnas = [c[1] for c in conn.execute("PRAGMA table_info(jobs)")]
-        assert columnas[1:] == ["title", "company", "description", "joburl", "applied", "createdAt"]
+        assert columnas[1 : 1 + len(DATOS)] == DATOS
 
     def test_clave_primaria_es_job_key(self, tabla, workdir):
         with sqlite3.connect(workdir / "jobs.db") as conn:
@@ -89,9 +92,13 @@ class TestConsultas:
         insert_job(trabajo())
         assert job_exists("Contador", "ACME") is True
 
-    def test_select_one_job_devuelve_descripcion_y_url(self, tabla):
-        insert_job(trabajo(description="una descripcion", url="http://x"))
-        assert select_one_job("Contador", "ACME") == ("una descripcion", "http://x")
+    def test_select_one_job_devuelve_descripcion_url_y_motivo(self, tabla):
+        insert_job(trabajo(description="una descripcion", url="http://x", reason="calza con el perfil"))
+        assert select_one_job("Contador", "ACME") == (
+            "una descripcion",
+            "http://x",
+            "calza con el perfil",
+        )
 
     def test_select_one_job_inexistente(self, tabla):
         assert select_one_job("no", "existe") is None
@@ -103,7 +110,46 @@ class TestConsultas:
 
     def test_columnas_de_la_grilla(self, tabla):
         insert_job(trabajo())
-        assert len(select_jobs()[0]) == 4
+        assert len(select_jobs()[0]) == 5
+
+    def test_la_grilla_muestra_el_puntaje(self, tabla):
+        insert_job(trabajo(score=82))
+        assert select_jobs()[0][4] == 82
+
+    def test_sin_puntaje_la_celda_queda_vacia(self, tabla):
+        """Un trabajo cargado a mano no tiene puntaje: mejor vacio que un -1."""
+        insert_job(trabajo())
+        assert select_jobs()[0][4] == ""
+
+
+class TestDescartadosPorLaAI:
+    """Se guardan para no volver a evaluarlos, pero no son candidatos."""
+
+    def descartado(self, title="Barista"):
+        return trabajo(title=title, relevant="no-relevante", score=10, reason="no es del area")
+
+    def test_se_guarda_pero_no_aparece_en_la_grilla(self, tabla):
+        assert insert_job(self.descartado()) is True
+        assert select_jobs() == []
+
+    def test_job_exists_lo_ve(self, tabla):
+        """Esta es la razon de guardarlo: la proxima corrida no le paga al LLM."""
+        insert_job(self.descartado())
+        assert job_exists("Barista", "ACME") is True
+
+    def test_no_cuenta_en_las_estadisticas(self, tabla):
+        insert_job(trabajo(title="Bueno", relevant="relevante", score=90))
+        insert_job(self.descartado())
+        assert get_jobs_stats() == {"total": 1, "applied": 0, "discarded": 0, "not_applied": 1}
+
+    def test_se_puede_revisar_por_que_se_descarto(self, tabla):
+        insert_job(self.descartado())
+        assert select_discarded_jobs()[0][:4] == ("Barista", "ACME", 10, "no es del area")
+
+    def test_un_trabajo_viejo_sin_veredicto_sigue_apareciendo(self, tabla):
+        """Lo guardado antes de que existiera el puntaje no se pierde."""
+        insert_job(trabajo(title="Antiguo"))
+        assert [row[0] for row in select_jobs()] == ["Antiguo"]
 
 
 class TestEstadoYBorrado:

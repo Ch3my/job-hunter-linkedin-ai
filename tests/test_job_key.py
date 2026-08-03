@@ -132,7 +132,7 @@ class TestDeduplicacionReal:
     def test_se_conserva_el_texto_original_para_mostrar(self):
         """La clave se normaliza, pero en pantalla se ve lo que trajo la API."""
         insert_job(JobPosting(title="Nutricionista (H/F)", company="Aramark Chile"))
-        titulo, empresa, _, _ = select_jobs()[0]
+        titulo, empresa, _, _, _ = select_jobs()[0]
         assert titulo == "Nutricionista (H/F)"
         assert empresa == "Aramark Chile"
 
@@ -159,7 +159,7 @@ class TestBusquedasPorClave:
         assert job_exists("nutricionista", "ARAMARK CHILE") is True
 
     def test_select_one_job_con_el_texto_guardado(self):
-        assert select_one_job("Nutricionista (H/F)", "Aramark Chile") == ("desc", "http://u")
+        assert select_one_job("Nutricionista (H/F)", "Aramark Chile") == ("desc", "http://u", "")
 
     def test_update_status_con_el_texto_guardado(self):
         assert update_job_status(APPLIED, "Nutricionista (H/F)", "Aramark Chile")
@@ -200,7 +200,7 @@ class TestMigracionDesdeElEsquemaViejo:
         assert len(filas) == 1
         assert filas[0][0] == "Nutricionista"
         assert filas[0][2] == APPLIED
-        assert select_one_job("Nutricionista", "Aramark") == ("desc", "http://u")
+        assert select_one_job("Nutricionista", "Aramark") == ("desc", "http://u", "")
 
     def test_fusiona_los_duplicados_que_se_habian_colado(self, db_vieja):
         db_vieja([

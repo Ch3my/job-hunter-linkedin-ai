@@ -34,7 +34,11 @@ class JobPosting:
     external_id: str = ""
     source: str = ""
     applied: str = NOT_APPLIED
+    # Veredicto de la AI. `score` es 0-100; -1 significa "no evaluado" (no habia
+    # AI configurada, o el LLM fallo y el trabajo paso por la politica de duda).
     relevant: str = ""
+    score: int = -1
+    reason: str = ""
     raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property

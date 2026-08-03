@@ -34,9 +34,17 @@ SCHEMA = """
         description TEXT,
         joburl TEXT,
         applied TEXT,
-        createdAt TEXT
+        createdAt TEXT,
+        relevant TEXT,
+        score INTEGER,
+        reason TEXT
     )
 """
+
+# Los descartados por la AI tambien se guardan, para no volver a pagarle al LLM
+# por el mismo trabajo en cada corrida. No son candidatos, asi que se excluyen
+# de la grilla y de las estadisticas con esta condicion.
+NOT_DISCARDED_BY_AI = "COALESCE(relevant, '') != 'no-relevante'"
 
 
 def create_table() -> bool:
@@ -44,11 +52,26 @@ def create_table() -> bool:
         with connect() as conn:
             _migrate(conn)
             conn.execute(SCHEMA)
+            _add_missing_columns(conn)
             conn.commit()
         return True
     except sqlite3.Error as error:
         log_exception("create_table", error)
         return False
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """Agrega las columnas del veredicto de la AI a una tabla ya existente.
+
+    `CREATE TABLE IF NOT EXISTS` no toca una tabla que ya esta, asi que las
+    columnas nuevas hay que agregarlas a mano. Las filas viejas quedan con NULL,
+    que es justo lo que `NOT_DISCARDED_BY_AI` trata como "no descartado": un
+    trabajo guardado antes de esto sigue apareciendo en la grilla.
+    """
+    columnas = [c[1] for c in conn.execute("PRAGMA table_info(jobs)")]
+    for nombre, tipo in (("relevant", "TEXT"), ("score", "INTEGER"), ("reason", "TEXT")):
+        if nombre not in columnas:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {nombre} {tipo}")
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -114,7 +137,12 @@ def check_table_exists() -> bool:
 
 
 def job_exists(title: str, company: str) -> bool:
-    """Se usa antes de llamar a la AI, para no gastar tokens en trabajos ya guardados."""
+    """Se usa antes de llamar a la AI, para no gastar tokens en trabajos ya evaluados.
+
+    A proposito NO filtra por `relevant`: un trabajo que la AI ya descarto
+    tambien "existe", y volver a mandarlo al LLM seria pagar dos veces por la
+    misma respuesta.
+    """
     try:
         with connect() as conn:
             row = conn.execute(
@@ -136,8 +164,9 @@ def insert_job(posting: JobPosting) -> bool:
         with connect() as conn:
             conn.execute(
                 """
-                INSERT INTO jobs (job_key, title, company, description, joburl, applied, createdAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO jobs (job_key, title, company, description, joburl, applied,
+                                  createdAt, relevant, score, reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     posting.key,
@@ -147,6 +176,9 @@ def insert_job(posting: JobPosting) -> bool:
                     posting.url,
                     posting.applied or NOT_APPLIED,
                     created_at,
+                    posting.relevant,
+                    posting.score,
+                    posting.reason,
                 ),
             )
             conn.commit()
@@ -173,22 +205,48 @@ def update_job_status(new_status: str, title: str, company: str) -> bool:
 
 
 def select_jobs() -> List[Tuple]:
+    """Filas para la grilla: (title, company, applied, createdAt, score).
+
+    Solo candidatos; los descartados por la AI quedan guardados pero fuera.
+    """
     try:
         with connect() as conn:
             return conn.execute(
-                "SELECT title, company, applied, createdAt FROM jobs ORDER BY createdAt DESC"
+                f"""
+                SELECT title, company, applied, createdAt, CASE WHEN COALESCE(score, -1) < 0 THEN '' ELSE score END
+                FROM jobs WHERE {NOT_DISCARDED_BY_AI} ORDER BY createdAt DESC
+                """
             ).fetchall()
     except sqlite3.Error as error:
         log_exception("select_jobs", error)
         return []
 
 
-def select_one_job(title: str, company: str) -> Optional[Tuple]:
-    """Devuelve (description, joburl) o None."""
+def select_discarded_jobs() -> List[Tuple]:
+    """Lo que la AI descarto, con su puntaje y motivo.
+
+    No lo usa la UI todavia; sirve para revisar por que se esta filtrando algo
+    y ajustar prompt.txt (o el minScore) con datos en vez de a ciegas.
+    """
     try:
         with connect() as conn:
             return conn.execute(
-                "SELECT description, joburl FROM jobs WHERE job_key=?",
+                """
+                SELECT title, company, CASE WHEN COALESCE(score, -1) < 0 THEN '' ELSE score END, COALESCE(reason, ''), createdAt
+                FROM jobs WHERE relevant = 'no-relevante' ORDER BY createdAt DESC
+                """
+            ).fetchall()
+    except sqlite3.Error as error:
+        log_exception("select_discarded_jobs", error)
+        return []
+
+
+def select_one_job(title: str, company: str) -> Optional[Tuple]:
+    """Devuelve (description, joburl, reason) o None."""
+    try:
+        with connect() as conn:
+            return conn.execute(
+                "SELECT description, joburl, COALESCE(reason, '') FROM jobs WHERE job_key=?",
                 (build_job_key(title, company),),
             ).fetchone()
     except sqlite3.Error as error:
@@ -224,9 +282,13 @@ def get_jobs_stats() -> Dict[str, int]:
     stats = {"total": 0, "applied": 0, "discarded": 0, "not_applied": 0}
     try:
         with connect() as conn:
-            stats["total"] = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            # Mismo criterio que la grilla: se cuentan candidatos, no descartes
+            # de la AI. Si no, "Total" no coincidiria con lo que se ve en pantalla.
+            stats["total"] = conn.execute(
+                f"SELECT COUNT(*) FROM jobs WHERE {NOT_DISCARDED_BY_AI}"
+            ).fetchone()[0]
             rows = conn.execute(
-                "SELECT applied, COUNT(*) FROM jobs GROUP BY applied"
+                f"SELECT applied, COUNT(*) FROM jobs WHERE {NOT_DISCARDED_BY_AI} GROUP BY applied"
             ).fetchall()
     except sqlite3.Error as error:
         log_exception("get_jobs_stats", error)

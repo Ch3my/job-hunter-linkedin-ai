@@ -3,6 +3,9 @@
   "rapidApiKey": "YOUR API KEY",
   "requestTimeout": 30,
   "maxRetries": 3,
+  "ai": {
+    "minScore": 60
+  },
   "providers": {
     "fantastic_linkedin": {
       "search": {

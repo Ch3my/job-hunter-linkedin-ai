@@ -28,6 +28,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "rapidApiKey": "",
     "requestTimeout": 30,
     "maxRetries": 3,
+    # El corte lo pone el usuario, no el modelo: el LLM entrega un puntaje de
+    # 0 a 100 y aca se decide desde donde vale la pena revisar el trabajo.
+    # Subirlo filtra mas; bajarlo deja pasar mas.
+    "ai": {"minScore": 60},
     "providers": {
         # https://rapidapi.com/fantastic-jobs-fantastic-jobs-default/api/linkedin-job-search-api
         # Las claves de "search" son los nombres reales de los parametros de la
@@ -132,6 +136,23 @@ def provider_settings(name: str, config: Dict[str, Any] = None) -> Dict[str, Any
     settings.setdefault("requestTimeout", config.get("requestTimeout", 30))
     settings.setdefault("maxRetries", config.get("maxRetries", 3))
     return settings
+
+
+def min_score(config: Dict[str, Any] = None) -> int:
+    """Puntaje minimo (0-100) para considerar relevante un trabajo.
+
+    Un valor fuera de rango o no numerico se ignora y se usa el default: el
+    config lo edita una persona a mano y un typo no puede dejar la busqueda
+    filtrando todo (100) o nada (0) sin aviso.
+    """
+    config = config or load_config()
+    default = DEFAULT_CONFIG["ai"]["minScore"]
+    valor = (config.get("ai") or {}).get("minScore", default)
+    try:
+        valor = int(valor)
+    except (TypeError, ValueError):
+        return default
+    return valor if 0 <= valor <= 100 else default
 
 
 def read_prompt_file(filename: str = "prompt.txt") -> str:

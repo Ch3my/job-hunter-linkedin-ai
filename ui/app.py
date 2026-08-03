@@ -78,7 +78,7 @@ class JobDatabaseGUI:
 
         self.tree = ttk.Treeview(
             tree_frame,
-            columns=("Title", "Company", "Applied", "Created At"),
+            columns=("Title", "Company", "Applied", "Created At", "Score"),
             show="headings",
             height=10,
         )
@@ -86,9 +86,14 @@ class JobDatabaseGUI:
         self.tree.heading("Company", text="Company")
         self.tree.heading("Applied", text="Applied")
         self.tree.heading("Created At", text="Created At")
+        self.tree.heading("Score", text="Score")
 
         self.tree.column("Title", width=500)
         self.tree.column("Applied", width=100)
+        # Ancho justo para "2026-01-02 10:00:00"; el resto del espacio le sirve
+        # mas al titulo, que es lo que uno lee.
+        self.tree.column("Created At", width=140, anchor="center")
+        self.tree.column("Score", width=60, anchor="center")
 
         tree_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=tree_scrollbar.set)
@@ -291,8 +296,13 @@ class JobDatabaseGUI:
             details = select_one_job(record[0], record[1])
             self.description_text.delete("1.0", tk.END)
             if details:
-                self.description_text.insert(tk.END, details[0] or "")
-                self.url_var.set(details[1] or "")
+                descripcion, url, motivo = details[0] or "", details[1] or "", details[2] or ""
+                # El motivo de la AI va arriba de todo: es lo primero que uno
+                # quiere leer al pararse sobre un trabajo.
+                if motivo:
+                    self.description_text.insert(tk.END, f"AI: {motivo}\n\n")
+                self.description_text.insert(tk.END, descripcion)
+                self.url_var.set(url)
             else:
                 self.url_var.set("")
 
@@ -305,7 +315,9 @@ class JobDatabaseGUI:
 
         update_job_status(new_status, record[0], record[1])
         self.update_stats()
-        self.tree.item(selected_item, values=(record[0], record[1], new_status, record[3]))
+        self.tree.item(
+            selected_item, values=(record[0], record[1], new_status, record[3], record[4])
+        )
 
     # ------------------------------------------------------------- busqueda
     def start_threaded_operation(self):
